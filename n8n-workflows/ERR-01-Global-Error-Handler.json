@@ -1,0 +1,187 @@
+{
+  "name": "ERR-01 - Global Error Handler [Production]",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -32
+      ],
+      "id": "c56951af-d12c-4ae4-9cfc-0a14980590e8",
+      "name": "ErrorTrigger"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "ERROR_LOG_SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "ErrorProductionLog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/ERROR_LOG_SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "ErrorLog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/ERROR_LOG_SPREADSHEET_ID_HERE/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Execution URL": "={{ $json.execution.url }}",
+            "Error Message": "={{ $json.execution.error.message }}",
+            "Workflow Name": "={{ $json.workflow.name }}",
+            "Timestamp": "={{ $now.toISO() }}",
+            "Failed Node": "={{ $json.execution.lastNodeExecuted }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Workflow Name",
+              "displayName": "Workflow Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Failed Node",
+              "displayName": "Failed Node",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Error Message",
+              "displayName": "Error Message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Execution URL",
+              "displayName": "Execution URL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        -32
+      ],
+      "id": "e7427fcc-0bbc-4ad9-99e9-311da727293c",
+      "name": "ErrorProductionLog",
+      "retryOnFail": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "OWNER_WHATSAPP_NUMBER_HERE"
+            },
+            {
+              "name": "message",
+              "value": "= Workflow: {{ $json['Workflow Name'] }}\n  Failed Node: {{ $json['Failed Node'] }}\n  Error: {{ $json['Error Message'] }}\n  Time: {{ $now.toISO() }}\n  \n  Execution detail: {{ $json['Execution URL'] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "56e1f71a-9b63-4f1d-baaa-349397ab6914",
+      "name": "ForwardPausedMessageToOwner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        -32
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "ErrorTrigger": {
+      "main": [
+        [
+          {
+            "node": "ErrorProductionLog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ErrorProductionLog": {
+      "main": [
+        [
+          {
+            "node": "ForwardPausedMessageToOwner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

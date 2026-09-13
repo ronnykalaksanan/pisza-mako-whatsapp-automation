@@ -1,0 +1,511 @@
+{
+  "name": "PZM-03 - Offline Order Intake [Demo]",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📌 PZM-03 — Offline Order Intake [Demo]\n\n**Owned By:** [Nama kamu / Pisza Mako]\n**Last Updated:** 2026-09-02\n\n**Description:**\nTerima order dari frontend (form order offline/GoFood di Vercel) lewat webhook,\nlalu simpan ke Auto-Order + upsert CRM - pakai logic yang sama seperti PZM-01,\nsupaya order non-WA tetap konsisten update CRM.\n\n**Flow Steps:**\n1. Terima webhook dari frontend (POST)\n2. Normalisasi nomor HP (kalau ada)\n3. Simpan ke Auto-Order + upsert CRM (paralel)\n4. Balas OK ke frontend\n\n**Dependencies:**\n- Credential: Google Sheets OAuth2\n- Global Error Workflow: ErrorHandler [Global]\n- Dipanggil oleh: frontend Next.js, endpoint /api/order-offline (lihat N8N_ORDER_WEBHOOK_URL di .env)\n",
+        "height": 628,
+        "width": 608
+      },
+      "id": "7b446b42-f596-4673-9039-62cd4fbbeb2e",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        672,
+        -512
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pizza-mako-offline-order",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "9bd7d9db-b9bc-428e-8a32-5085c218d4a4",
+      "name": "ReceiveOfflineOrder",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        176
+      ],
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nlet digits = String(body.phone || '').replace(/[^0-9]/g, '');\nif (digits) {\n  if (digits.startsWith('0')) digits = '62' + digits.slice(1);\n  if (!digits.startsWith('62')) digits = '62' + digits;\n}\nreturn [{ json: { ...body, phone_normalized: digits } }];"
+      },
+      "id": "9c36b535-e6ff-4fe3-a5e8-8ce1c77804b5",
+      "name": "NormalizeOfflinePhone",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 78269982,
+          "mode": "list",
+          "cachedResultName": "Auto-Order",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=78269982"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now.setZone('Asia/Jakarta').toFormat('yyyy-MM-dd HH:mm:ss') }}",
+            "Nomor WA": "={{ $json.phone_normalized }}",
+            "Detail Item": "={{ JSON.stringify($json.items) }}",
+            "Jumlah": "={{ $json.items.reduce((a,i) => a + (i.qty||1), 0) }}",
+            "Total": "={{ $json.total }}",
+            "Channel": "={{ $json.channel }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Detail Item",
+              "displayName": "Detail Item",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Jumlah",
+              "displayName": "Jumlah",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total",
+              "displayName": "Total",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Channel",
+              "displayName": "Channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Metode Kirim",
+              "displayName": "Metode Kirim",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Metode Bayar",
+              "displayName": "Metode Bayar",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Alamat Pengiriman",
+              "displayName": "Alamat Pengiriman",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "7fd73b3b-fbd9-48e8-a84d-1b908cd72c0a",
+      "name": "AppendOfflineToAutoOrder",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1696,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $('NormalizeOfflinePhone').first().json.phone_normalized }}",
+            "total_order": "={{ (Number($json.total_order) || 0) + 1 }}",
+            "last_order_date": "={{ $now.setZone('Asia/Jakarta').toFormat('yyyy-MM-dd') }}"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "a7a780ba-619c-4799-b2d5-8a07859ed5a5",
+      "name": "UpsertCRMFromOfflineOrder",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1696,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ok",
+              "name": "success",
+              "type": "boolean",
+              "value": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e2f9f5f0-9565-45fe-84c7-a4fad28209af",
+      "name": "RespondOfflineOrderOk",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2144,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "id": "6d335244-5111-4b69-85bf-0525188dc26a",
+      "name": "MergeOfflineWrites",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1920,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Nomor WA",
+              "lookupValue": "={{ $json.phone_normalized }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "15efbca5-9239-40c9-a1e0-20bc67dcad68",
+      "name": "LookupExistingCRM",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1472,
+        272
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "ReceiveOfflineOrder": {
+      "main": [
+        [
+          {
+            "node": "NormalizeOfflinePhone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NormalizeOfflinePhone": {
+      "main": [
+        [
+          {
+            "node": "AppendOfflineToAutoOrder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "LookupExistingCRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AppendOfflineToAutoOrder": {
+      "main": [
+        [
+          {
+            "node": "MergeOfflineWrites",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MergeOfflineWrites": {
+      "main": [
+        [
+          {
+            "node": "RespondOfflineOrderOk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LookupExistingCRM": {
+      "main": [
+        [
+          {
+            "node": "UpsertCRMFromOfflineOrder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UpsertCRMFromOfflineOrder": {
+      "main": [
+        [
+          {
+            "node": "MergeOfflineWrites",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

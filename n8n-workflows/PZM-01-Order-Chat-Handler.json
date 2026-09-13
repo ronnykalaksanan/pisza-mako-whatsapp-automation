@@ -1,0 +1,3480 @@
+{
+  "name": "PZM-01 - Order & Chat Handler [Demo]",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📌 PZM-01 — Order & Chat Handler [Demo]\n\n**Owned By:** [Nama kamu / Pisza Mako]\n**Last Updated:** 2026-09-02\n\n**Description:**\nMenangani chat WA masuk dari pelanggan Pisza Mako via Fonnte, cek jam operasional,\njawab pertanyaan menu via AI, dan proses order sampai tersimpan ke Google Sheets\n(Auto-Order + CRM).\n\n**Flow Steps:**\n1. Terima webhook dari Fonnte\n2. Normalisasi nomor HP\n3. Debounce (tunggu pesan susulan)\n4. Cek jam operasional (Jadwal Operasional)\n5. Ambil katalog menu (cache)\n6. Lookup CRM pelanggan\n7. Klasifikasi intent (model kecil) -> eskalasi kalau komplain\n8. AI Agent order (Groq/Llama 70b) -> JSON {reply, status, order_detail}\n9. Branch: asking -> balas saja | confirmed -> validasi & simpan\n10. Simpan ke Auto-Order + upsert CRM (paralel)\n11. Kirim balasan final via Fonnte\n\n**Dependencies:**\n- Credential: Fonnte API (Header Auth)\n- Credential: Groq API\n- Credential: Google Sheets OAuth2\n- Sub-workflow terkait: PZM-00 (Cache Refresh), PZM-02 (Nightly Report)\n- Global Error Workflow: ErrorHandler [Global] (set di Workflow Settings)\n\n**Ganti sebelum jalan:**\n- SPREADSHEET_ID_HERE -> ID Google Sheet Pisza Mako\n- FONNTE_ENDPOINT_HERE -> https://api.fonnte.com/send\n- Semua credential id/name -> credential asli di akun n8n kamu\n",
+        "height": 620,
+        "width": 520
+      },
+      "id": "55dbbbab-c635-45c5-a307-3e28fb9a937e",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        16624,
+        3040
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pizza-mako-inbound",
+        "options": {}
+      },
+      "id": "895ffc38-2100-4d3b-b92d-655aaf6defb7",
+      "name": "ReceiveWhatsAppMessage",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        17200,
+        4272
+      ],
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nlet raw = String(body.sender || body.phone || body.from || '').trim();\nlet digits = raw.replace(/[^0-9]/g, '');\nif (digits.startsWith('0')) {\n  digits = '62' + digits.slice(1);\n}\nif (!digits.startsWith('62')) {\n  digits = '62' + digits;\n}\nreturn [{\n  json: {\n    ...body,\n    phone_normalized: digits,\n    message_text: body.message || body.text || ''\n  }\n}];"
+      },
+      "id": "6b01a1ea-3458-4405-954c-e3c6582f8083",
+      "name": "NormalizePhoneNumber",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        17424,
+        4272
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 2.5
+      },
+      "id": "862c68df-34d6-4feb-a6be-443d294b640c",
+      "name": "DebounceIncomingMessage",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        18320,
+        4272
+      ],
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1045895638,
+          "mode": "list",
+          "cachedResultName": "Jadwal Operasional",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1045895638"
+        },
+        "options": {}
+      },
+      "id": "657c50ee-a958-4db7-8b62-b2a948a04606",
+      "name": "FetchJadwalOperasional",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        18544,
+        4272
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst now = DateTime.now().setZone('Asia/Jakarta');\nlet inHours = false;\n\nif (row.Mode === 'Selalu') {\n  inHours = true;\n} else if (row.Mode === 'Jam Harian') {\n  const [openH, openM] = String(row['Jam Buka']).split(':').map(Number);\n  const [closeH, closeM] = String(row['Jam Tutup']).split(':').map(Number);\n  const openDt = now.set({ hour: openH, minute: openM, second: 0 });\n  const closeDt = now.set({ hour: closeH, minute: closeM, second: 0 });\n  inHours = now >= openDt && now <= closeDt;\n} else if (row.Mode === 'Rentang Tanggal') {\n  const start = DateTime.fromFormat(row['Mulai (tanggal+jam)'], 'yyyy-MM-dd HH:mm', { zone: 'Asia/Jakarta' });\n  const end = DateTime.fromFormat(row['Selesai (tanggal+jam)'], 'yyyy-MM-dd HH:mm', { zone: 'Asia/Jakarta' });\n  inHours = now >= start && now <= end;\n}\n\nreturn [{ json: { ...($('NormalizePhoneNumber').first().json), in_hours: inHours } }];"
+      },
+      "id": "e555deed-1659-4a2b-a12c-4a50af62e511",
+      "name": "CheckOperatingHours",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        18768,
+        4272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.in_hours }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "95abb41d-3669-43d7-9e69-75c4485abee3",
+      "name": "RouteByOperatingHours",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        18992,
+        4272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "Halo kak, maaf saat ini kami sedang tutup. Silakan hubungi kami lagi di jam operasional ya 🙏"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {}
+          }
+        }
+      },
+      "id": "8d7e28e7-8ce4-484c-9a0f-4b019205d007",
+      "name": "SendClosedNotice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        19216,
+        4368
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "94834fe6-0235-4e72-87c2-7dfa3176b810",
+      "name": "StopClosed",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        19440,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "WORKFLOW_ID_PZM00",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/WORKFLOW_ID_PZM00",
+          "cachedResultName": "PZM-00 - Menu Cache Refresh [Demo]"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "fe0d0173-28af-4e06-ac47-6a0a340036ad",
+      "name": "GetCachedMenu",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        19216,
+        4176
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Nomor WA",
+              "lookupValue": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8da807c1-a4ee-49b7-8dc9-425f7d1c681c",
+      "name": "LookupCRMCustomer",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        19440,
+        4176
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Pesan pelanggan: {{ $('NormalizePhoneNumber').first().json.message_text }}",
+        "options": {
+          "systemMessage": "Klasifikasikan pesan pelanggan ke salah satu: 'menu', 'order', 'komplain'. Balas HANYA salah satu kata itu, tanpa penjelasan tambahan."
+        }
+      },
+      "id": "0da947d6-5855-40d7-b466-f59185d80576",
+      "name": "ClassifyIntent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        20112,
+        4064
+      ]
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-20b",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "089d099a-e417-41f6-978b-eca4630047eb",
+      "name": "llama-3.1-8b-instant (Groq)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        20176,
+        4304
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "GROQ_CRED_ID",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond2",
+              "leftValue": "={{ $json.output.toLowerCase().trim() }}",
+              "rightValue": "komplain",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "510dc82c-2929-4492-b211-1fe5a4ad94c3",
+      "name": "RouteByIntent",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        20464,
+        4176
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "OWNER_WHATSAPP_NUMBER_HERE"
+            },
+            {
+              "name": "message",
+              "value": "=⚠️ Komplain/eskalasi dari {{ $('NormalizePhoneNumber').first().json.phone_normalized }}: {{ $('NormalizePhoneNumber').first().json.message_text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e26b65a9-fcc9-4d84-8014-acbc14119751",
+      "name": "EscalateToOwner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        21104,
+        4448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "90edbf52-65a2-4e8e-83ad-1f27eef99f4d",
+      "name": "StopEscalated",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        21392,
+        4448
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Nama: {{ $('LookupCRMCustomer').first().json.Nama || 'Tidak diketahui' }}\nPelanggan lama: {{ $('LookupCRMCustomer').first().json['Nomor WA'] ? 'Ya' : 'Tidak' }}\nMenu tersedia: {{ JSON.stringify($('GetCachedMenu').first().json.menu) }}\nAlamat outlet/lokasi saat ini: {{ $('FetchJadwalOperasional').first().json.Alamat || 'belum diisi' }}\nCOD tersedia: {{ $('FetchGlobalBotSetting').first().json['COD Aktif'] === 'TRUE' ? 'Ya' : 'Tidak' }}\nPesan: {{ $('NormalizePhoneNumber').first().json.message_text }}\n",
+        "options": {
+          "systemMessage": "Kamu adalah asisten WhatsApp untuk Pisza Mako, bisnis kuliner pizza rumahan.\nTugasmu: menjawab pertanyaan pelanggan soal menu, dan membantu proses order.\n\nATURAN:\n1. Gunakan HANYA data menu yang ada di context - jangan mengarang menu atau harga.\n2. Selalu sapa pelanggan dengan \"kak\", apapun sapaan yang mereka pakai ke kamu (walau dipanggil \"pak\"/\"bu\", tetap balas pakai \"kak\").\n3. Kalau pelanggan menunjukkan niat mau order (\"mau pesan\", \"aku order\", dst) dan belum kasih detail lengkap, JANGAN tanya satu-satu field. Langsung kirim SATU pesan berisi form isian singkat, kira-kira begini:\n\n\"Oke kak, untuk order, tolong isi ini ya:\n- Menu & jumlah:\n- Catatan (kalau ada):\n- Cara ambil (Diambil Sendiri/COD/GoSend):\n- Cara bayar (Cash/QRIS):\n- Atas nama:\"\n\nSesuaikan baris \"Cara ambil\" - JANGAN cantumkan opsi COD di form kalau context bilang COD lagi tidak aktif.\n\n3a. Kalau pelanggan sudah balas form itu (lengkap sekaligus atau nyicil beberapa pesan), gabungkan semua info yang sudah didapat. Kalau masih ada yang kurang, tanya SPESIFIK cuma bagian yang belum terisi - jangan kirim ulang form lengkap.\n3b. Catatan khusus per item (misal \"tanpa nanas\") dicatat di field \"catatan\" item itu. Kalau kosong, isi string kosong \"\" - JANGAN bilang \"catatan sudah kosong\" (bisa disalahartikan \"menu kosong\"/stok habis) - kalau perlu, bilang \"tanpa catatan tambahan ya\" sebagai gantinya.\n3c. Metode kirim ada 3: \"Diambil Sendiri\", \"COD\" (admin yang antar langsung, bayar cash, ongkir dihitung admin manual - HANYA ditawarkan kalau context bilang COD lagi aktif; minta alamat lengkap pengiriman, simpan di field \"alamat_pengiriman\"), \"GoSend\" (pelanggan pesan GoSend sendiri setelah order dikonfirmasi, Penting kalau GoSend WAJIB bayar QRIS karena kita tidak pegang cash di titik itu).\n3d. Metode bayar: \"Cash\" atau \"QRIS\". Kalau QRIS, kasih tau kode QR dikirim terpisah setelah order dikonfirmasi, minta kirim bukti pembayaran setelah transfer.\n3e. Kalau ditanya rekomendasi, sebutkan menu yang \"Rekomendasi\"-nya true di context. Kalau tidak ada yang ditandai, jujur bilang belum ada rekomendasi khusus hari ini.\n3f. Cek \"Stok Tersisa\" tiap menu di context. Kalau pelanggan minta lebih dari stok yang ada, kasih tau jumlah sisa yang sebenarnya, jangan langsung diiyakan.\n4. Begitu semua detail order (menu, jumlah, nama, cara ambil, cara bayar) lengkap, rangkum semuanya dan MINTA KONFIRMASI eksplisit sebelum dianggap final.\n5. Jangan pernah set status \"confirmed\" kecuali pelanggan sudah jelas bilang setuju/iya DAN semua field wajib sudah terisi.\n6. Kalau pelanggan adalah pelanggan lama (ada di context), sapa lebih personal, boleh tawarkan \"mau pesan yang biasa?\".\n7. Balas dalam Bahasa Indonesia, santai tapi sopan, gaya pemilik warung membalas WA - jangan kaku seperti bot formal.\n8. Kalau ada komplain, JANGAN coba selesaikan sendiri - ini seharusnya sudah tersaring sebelum sampai ke kamu.\n9. Kalau pelanggan cuma membalas basa-basi penutup (misal \"makasih\", \"oke\", \"sip\", \"ditunggu ya\") tanpa pertanyaan/order baru, balas singkat dan ramah - jangan ulangi rangkuman order/menu, jangan ubah status dari konteks sebelumnya.\n10. Kalau ditanya alamat/lokasi/\"dimana\", SALIN PERSIS nilai \"Alamat outlet/lokasi saat ini\" dari context apa adanya - JANGAN diringkas, ditafsirkan, atau diubah. Kalau berupa link, kirim link itu utuh.\n11. Kalau balasanmu menyebut/menampilkan daftar menu (baik murni tanya menu atau dicampur order), set \"kirim_foto_menu\": true. Jika pelanggan bertanya soal menu, ambil dan tuliskan daftar menu serta harganya secara jelas di dalam teks balasan berdasarkan data menu yang ada di context, agar pelanggan bisa langsung membacanya lewat chat.\n12. Kalau pelanggan menyebut tanggal/hari pengiriman tertentu (misal \"besok\", \"hari kamis\", tanggal spesifik) ATAU total jumlah pesanan lebih dari 30 pcs, JANGAN confirm sendiri. Set status \"asking\", set \"perlu_eskalasi_admin\": true, isi \"alasan_eskalasi\": \"Pre-Order/Pesanan Besar\", dan bilang ke pelanggan kamu catat dulu, admin yang akan konfirmasi ketersediaannya.\n13. Kalau pelanggan tanya hal yang sama sekali di luar konteks menu/order/bisnis (misal minta izin bikin konten di outlet), jangan coba jawab sendiri - bilang pertanyaan itu akan diteruskan ke admin, set \"perlu_eskalasi_admin\": true, \"alasan_eskalasi\": \"Pertanyaan Lain-lain\".\n\nFORMAT OUTPUT WAJIB:\nBalas HANYA dengan JSON valid, TANPA teks lain di luar JSON, TANPA markdown code fence (jangan pakai ```). Ikuti struktur persis ini:\n{\"reply\": \"teks balasan ke pelanggan\", \"status\": \"asking atau confirmed\", \"kirim_foto_menu\": true atau false, \"perlu_eskalasi_admin\": true atau false, \"alasan_eskalasi\": \"\" atau alasan singkat, \"order_detail\": {\"items\": [{\"menu\": \"...\", \"qty\": 1, \"catatan\": \"\"}], \"total\": 0, \"nama\": \"\", \"metode_kirim\": \"\", \"metode_bayar\": \"\", \"alamat_pengiriman\": \"\"} atau null kalau belum ada order}"
+        }
+      },
+      "id": "db0ec059-93d3-4c49-a87b-1cd542ddc5ae",
+      "name": "RunOrderAgent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        20688,
+        4016
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "id": "f981e848-d534-4fc0-add1-3a1979335e5d",
+      "name": "openai/gpt-oss-120b (Groq)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        20688,
+        4256
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "GROQ_CRED_ID",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}",
+        "contextWindowLength": 10
+      },
+      "id": "867fdfb0-06ef-4f05-b646-4367f678a3c7",
+      "name": "SessionMemoryByPhone",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        20816,
+        4256
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond3",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "confirmed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "dd185a71-0ec8-47fe-a709-d4cd66eab981",
+      "name": "RouteByStatus",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        22064,
+        4016
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.reply }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "38c7674f-d301-4b92-be9b-3a4e94cdc603",
+      "name": "SendReplyOnly",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        22288,
+        4304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "2ca37913-5d42-41d7-a16b-790a8821d11c",
+      "name": "StopAsking",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        23184,
+        4304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = $json;\nconst phone = $('NormalizePhoneNumber').first().json.phone_normalized;\nconst detail = out.order_detail || {};\nconst items = detail.items || [];\nconst total = detail.total || 0;\nconst nama = detail.nama || '';\nconst metodeKirim = detail.metode_kirim || '';\nconst metodeBayar = detail.metode_bayar || '';\nconst alamatPengiriman = detail.alamat_pengiriman || '';\nconst jumlah = items.reduce((a, i) => a + (i.qty || 1), 0);\nconst validPhone = /^62[0-9]{8,13}$/.test(phone);\n\nconst menuCache = ($('GetCachedMenu').first().json.menu) || [];\nlet stockIssue = null;\nfor (const item of items) {\n  const menuRow = menuCache.find(m => m.Menu === item.menu);\n  const stok = menuRow ? Number(menuRow['Stok Tersisa']) : null;\n  if (stok !== null && !isNaN(stok) && (item.qty || 1) > stok) {\n    stockIssue = `Maaf kak, stok ${item.menu} tinggal ${stok}, sedangkan diminta ${item.qty}. Mau dikurangi jumlahnya atau ganti menu?`;\n    break;\n  }\n}\n\nconst basicValid = validPhone && items.length > 0 && total > 0 && !!nama && !!metodeKirim && !!metodeBayar;\nconst isValid = basicValid && !stockIssue;\nconst statusPembayaran = metodeBayar === 'QRIS' ? 'Menunggu Verifikasi' : 'Bayar di Tempat';\nconst validationMessage = stockIssue || 'Maaf, sepertinya ada data order yang belum lengkap. Boleh diulang lagi menu dan jumlahnya? 🙏';\n\nreturn [{ json: {\n  ...out,\n  phone_normalized: phone,\n  is_valid: isValid,\n  jumlah,\n  items_json: JSON.stringify(items),\n  nama,\n  metode_kirim: metodeKirim,\n  metode_bayar: metodeBayar,\n  alamat_pengiriman: alamatPengiriman,\n  status_pembayaran: statusPembayaran,\n  validation_message: validationMessage\n} }];"
+      },
+      "id": "be32edc8-2551-4798-a91f-1ab86b350a21",
+      "name": "ValidateOrderData",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        22288,
+        3824
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond4",
+              "leftValue": "={{ $json.is_valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "251f0edd-f51b-4de5-a76f-e5cc0357884b",
+      "name": "CheckOrderValid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        22512,
+        3824
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.validation_message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b036563c-ac1c-4880-94bf-c6b77d8d5c93",
+      "name": "SendClarificationRequest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        22736,
+        4016
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "b4e47ed0-5f00-4390-a9d9-b3be3c4b29ce",
+      "name": "StopInvalid",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        22960,
+        4016
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 78269982,
+          "mode": "list",
+          "cachedResultName": "Auto-Order",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=78269982"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now.setZone('Asia/Jakarta').toFormat('yyyy-MM-dd HH:mm:ss') }}",
+            "Nomor WA": "={{ $json.phone_normalized }}",
+            "Detail Item": "={{ $json.items_json }}",
+            "Jumlah": "={{ $json.jumlah }}",
+            "Total": "={{ $json.order_detail.total }}",
+            "Channel": "WA",
+            "Nama": "={{ $json.nama }}",
+            "Metode Kirim": "={{ $json.metode_kirim }}",
+            "Metode Bayar": "={{ $json.metode_bayar }}",
+            "Alamat Pengiriman": "={{ $json.alamat_pengiriman }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Detail Item",
+              "displayName": "Detail Item",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Jumlah",
+              "displayName": "Jumlah",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Total",
+              "displayName": "Total",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Channel",
+              "displayName": "Channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Metode Kirim",
+              "displayName": "Metode Kirim",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Metode Bayar",
+              "displayName": "Metode Bayar",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Alamat Pengiriman",
+              "displayName": "Alamat Pengiriman",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "89171b4c-a48d-47d9-8859-b2d9538db44b",
+      "name": "AppendToAutoOrder",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        23184,
+        3200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $json.phone_normalized }}",
+            "total_order": "={{ (Number($('LookupCRMCustomer').first().json.total_order) || 0) + 1 }}",
+            "last_order_date": "={{ $now.setZone('Asia/Jakarta').toFormat('yyyy-MM-dd') }}",
+            "Nama": "={{ $('ValidateOrderData').first().json.nama }}"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "e7f6007e-84cf-47d8-821a-0c7e875f9f2d",
+      "name": "UpsertCRMRecord",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        23184,
+        3632
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "numberInputs": 3
+      },
+      "id": "0be8ef1b-6dc3-4f91-b984-4d8a21233737",
+      "name": "MergeSaveResults",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        23408,
+        3376
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $('ValidateOrderData').first().json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "=Order kamu sudah kami terima ✅\\nTotal: Rp{{ $('ValidateOrderData').first().json.order_detail.total }}\\nTerima kasih sudah order di Pisza Mako! 🍕"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "161948a4-7356-47a4-96eb-256d1e4a2245",
+      "name": "SendOrderConfirmation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        23632,
+        3392
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-bot",
+              "leftValue": "={{ JSON.stringify($json['Bot Aktif']) }}",
+              "rightValue": "FALSE",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9405f983-fe1d-48ea-be9c-33a701a6a29c",
+      "name": "CheckBotActive",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        19888,
+        4320
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "944e579d-ea76-4ea2-9457-3d2dbcbd7198",
+      "name": "StopBotPaused",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20464,
+        4464
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}",
+            "Bot Aktif": "FALSE",
+            "Bot Dijeda Sejak": "={{ $now.setZone('Asia/Jakarta').toISO() }}",
+            "Alasan Jeda": "Komplain"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c079d3a1-c031-4f57-8fb2-6cc325093bc0",
+      "name": "PauseBotForCustomer",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        20752,
+        4448
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-media",
+              "leftValue": "={{ $json.url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "16062f06-d58a-4339-b03c-6f2c03bb776a",
+      "name": "CheckIfMediaMessage",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        18096,
+        4368
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $json.phone_normalized }}",
+            "Bot Aktif": "FALSE",
+            "Bot Dijeda Sejak": "={{ $now.setZone('Asia/Jakarta').toISO() }}",
+            "Alasan Jeda": "Bukti Pembayaran"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "6beafbaa-dded-49d5-966b-41b1c93f92d9",
+      "name": "PauseBotForPaymentReview",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        18320,
+        4464
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "OWNER_WHATSAPP_NUMBER_HERE"
+            },
+            {
+              "name": "message",
+              "value": "=📸 Kemungkinan bukti pembayaran dari {{ $('NormalizePhoneNumber').first().json.phone_normalized }}:\\n{{ $('NormalizePhoneNumber').first().json.url }}\\n\\nBot untuk nomor ini sudah dijeda otomatis. Cek & verifikasi manual, lalu nyalakan lagi bot-nya lewat panel /percakapan kalau sudah selesai."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e9b45057-c40a-4668-a0a3-438ea995fb1b",
+      "name": "NotifyOwnerPaymentProof",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        18544,
+        4464
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "Bukti pembayaran diterima ya kak ✅ Ditunggu konfirmasinya sebentar dari admin."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "922829bf-0c8b-4229-bcfc-880ba2d92828",
+      "name": "ReplyProofReceived",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        18768,
+        4464
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "7e11e083-179c-4c30-b31a-8d23b58b24a5",
+      "name": "StopMediaHandled",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        18992,
+        4464
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-qris",
+              "leftValue": "={{ $('ValidateOrderData').first().json.metode_bayar }}",
+              "rightValue": "QRIS",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1babfb92-5889-43bd-931d-ada53235ffb9",
+      "name": "CheckIfQRISPayment",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        23856,
+        3392
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://pizza-mako-dashboard.vercel.app/qris.jpg",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "f060434f-21a0-47c7-a1f3-ba4018af45b5",
+      "name": "FetchQRISImage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        24080,
+        3296
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $('ValidateOrderData').first().json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "Ini kode QRIS-nya kak, silakan discan. Setelah bayar, tolong kirim screenshot bukti pembayarannya ya 🙏"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "054877fd-df9f-4524-94f9-4d2ee475f424",
+      "name": "SendQRISToCustomer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        24304,
+        3296
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "76c0050f-75d7-4dd0-af7a-ea32076c0895",
+      "name": "StopNoQRIS",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        24080,
+        3488
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 809152169,
+          "mode": "list",
+          "cachedResultName": "Pengaturan",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=809152169"
+        },
+        "options": {}
+      },
+      "id": "cd8da024-ae3c-4ab1-827d-8b1adfcf00fb",
+      "name": "FetchGlobalBotSetting",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        17648,
+        4272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-global",
+              "leftValue": "={{ JSON.stringify($json['Bot Global Aktif']) }}",
+              "rightValue": "false",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fedc1e0b-ea95-4e66-98e2-ee4340942d6c",
+      "name": "CheckGlobalBotOn",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        17872,
+        4272
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "057db75c-6782-407c-ae02-c47c87316535",
+      "name": "StopGlobalOff",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        18096,
+        4176
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "OWNER_WHATSAPP_NUMBER_HERE"
+            },
+            {
+              "name": "message",
+              "value": "=💬 Pesan dari {{ $('NormalizePhoneNumber').first().json.phone_normalized }} (bot off - alasan: {{ $json['Alasan Jeda'] || 'tidak diketahui' }}): {{ $('NormalizePhoneNumber').first().json.message_text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b9bed041-875f-43a4-a4b1-cf059742ad2e",
+      "name": "ForwardPausedMessageToOwner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        20176,
+        4464
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-menu",
+              "leftValue": "={{ $('CheckNeedsEscalation').item.json.kirim_foto_menu }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a07a8ad5-8448-4147-a8b6-865988348aac",
+      "name": "CheckIfMenuQuestion",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        22512,
+        4304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://pizza-mako-dashboard.vercel.app/menu.jpg",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "6e01456e-9ea3-434f-849a-4a94ac5aabe2",
+      "name": "FetchMenuPhoto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        22736,
+        4208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "Ini foto menu lengkapnya kak 🍕"
+            },
+            {
+              "name": "url",
+              "value": "https://pizza-mako-dashboard.vercel.app/menu.jpg"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e67bcdde-6a34-4a86-935d-ed146cb2a38f",
+      "name": "SendMenuPhotoToCustomer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        22960,
+        4208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "d81589b6-de3d-4b1e-b08c-016089e1bfd7",
+      "name": "StopNoMenuPhoto",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        22960,
+        4400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let parsed = null;\nlet parseFailed = false;\nlet rawText = $json.output || $json.text || '';\ntry {\n  let raw = String(rawText).trim();\n  raw = raw.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parseFailed = true;\n}\nif (parseFailed || !parsed || typeof parsed !== 'object') {\n  return [{ json: { parse_failed: true, raw_output: rawText } }];\n}\nreturn [{ json: { ...parsed, parse_failed: false } }];"
+      },
+      "id": "751ee6de-00a2-40ec-9ddd-54c055d8e2e5",
+      "name": "ParseAgentOutput",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        21392,
+        4016
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-parse",
+              "leftValue": "={{ $json.parse_failed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cd460233-8c98-4c52-9b04-5ea4adf112f4",
+      "name": "CheckParseSuccess",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        21616,
+        4016
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}",
+            "Bot Aktif": "FALSE",
+            "Bot Dijeda Sejak": "={{ $now.setZone('Asia/Jakarta').toISO() }}",
+            "Alasan Jeda": "Gagal Proses AI"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "e9314451-f8ba-4280-8f30-3be3f6e1f0d4",
+      "name": "PauseBotForParseFailure",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        21840,
+        3632
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "OWNER_WHATSAPP_NUMBER_HERE"
+            },
+            {
+              "name": "message",
+              "value": "=⚠️ AI gagal proses balasan buat {{ $('NormalizePhoneNumber').first().json.phone_normalized }}. Bot dijeda otomatis. Raw output AI:\\n{{ $json.raw_output }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "abeac177-8f9d-490e-8677-0ec81e3a271b",
+      "name": "NotifyOwnerParseFailure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        22064,
+        3632
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "FONNTE_ENDPOINT_HERE",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $credentials.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "Maaf kak, lagi ada kendala teknis sebentar. Admin akan bantu langsung ya 🙏"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8222df15-7d08-4f82-ad4e-5eb9c5fbb0a6",
+      "name": "ReplyParseFailureToCustomer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        22288,
+        3632
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "4ad1edac-4f09-46a1-862a-5d7bc74b2cdc",
+      "name": "StopParseFailed",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        22512,
+        3632
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = ($json.order_detail && $json.order_detail.items) || [];\nconst menuCache = ($('GetCachedMenu').first().json.menu) || [];\nreturn items.map(item => {\n  const menuRow = menuCache.find(m => m.Menu === item.menu);\n  const oldStok = menuRow ? Number(menuRow['Stok Tersisa']) : null;\n  const newStok = (oldStok !== null && !isNaN(oldStok)) ? Math.max(oldStok - (item.qty || 1), 0) : null;\n  return { json: { Menu: item.menu, newStok } };\n}).filter(i => i.json.newStok !== null);"
+      },
+      "id": "c7197069-86ff-4d6b-a69e-aed9184120dd",
+      "name": "PrepareStockDecrement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        22736,
+        3824
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Katalog Menu",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Menu": "={{ $json.Menu }}",
+            "Stok Tersisa": "={{ $json.newStok }}"
+          },
+          "matchingColumns": [
+            "Menu"
+          ],
+          "schema": [
+            {
+              "id": "Menu",
+              "displayName": "Menu",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Deskripsi",
+              "displayName": "Deskripsi",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Harga",
+              "displayName": "Harga",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Aktif",
+              "displayName": "Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Rekomendasi",
+              "displayName": "Rekomendasi",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Stok Tersisa",
+              "displayName": "Stok Tersisa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "eb17748b-4f43-4ac6-bd33-2a5a79d828ee",
+      "name": "DecrementMenuStock",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        22960,
+        3824
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://piszamako.app.n8n.cloud/webhook/pizza-mako-refresh-menu-cache",
+        "options": {}
+      },
+      "id": "64f78544-51d4-4470-98fb-8ddcc0c5aaa4",
+      "name": "RefreshCacheAfterStockChange",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        23184,
+        3824
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-esc",
+              "leftValue": "={{ $json.perlu_eskalasi_admin }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3648f3e0-cdc3-4c5a-8e64-13ae5ad518a0",
+      "name": "CheckNeedsEscalation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        21840,
+        4112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.reply }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ce7fe1d7-17e2-4445-95d8-95f7a8e574a5",
+      "name": "SendReplyForEscalatedCase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        22064,
+        4576
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}",
+            "Bot Aktif": "FALSE",
+            "Bot Dijeda Sejak": "={{ $now.setZone('Asia/Jakarta').toISO() }}",
+            "Alasan Jeda": "={{ $json.alasan_eskalasi }}"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "36b868db-1b05-4bc6-b5f2-bd54e6db4995",
+      "name": "PauseBotForAdminEscalation",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        22288,
+        4576
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "OWNER_WHATSAPP_NUMBER_HERE"
+            },
+            {
+              "name": "message",
+              "value": "=📋 Eskalasi ({{ $json.alasan_eskalasi }}) dari {{ $('NormalizePhoneNumber').first().json.phone_normalized }}: {{ $('NormalizePhoneNumber').first().json.message_text }}\\n\\nDetail order (kalau ada): {{ JSON.stringify($json.order_detail) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "065999df-acb3-46d1-b415-6b56ae09c90b",
+      "name": "NotifyOwnerGeneralEscalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        22512,
+        4576
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "62f1e8db-f2f6-46eb-8a4b-d05079a58cf4",
+      "name": "StopGeneralEscalation",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        22736,
+        4576
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "95cb8bc0-f313-4e2b-a7c8-125eb4a93870",
+      "name": "Gemini 2.5 Flash (Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        21104,
+        4272
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "GROQ_CLASSIFY_CRED_ID",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-testi",
+              "leftValue": "={{ $json['Status Testimoni'] }}",
+              "rightValue": "Ditanya",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2da67e53-9b36-4338-bd79-c2c6dc9fa05a",
+      "name": "CheckIfAwaitingTestimonial",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        19664,
+        4176
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 63762132,
+          "mode": "list",
+          "cachedResultName": "Testimoni",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=63762132"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now.setZone('Asia/Jakarta').toFormat('yyyy-MM-dd HH:mm:ss') }}",
+            "Nomor WA": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}",
+            "Isi Testimoni": "={{ $('NormalizePhoneNumber').first().json.message_text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Isi Testimoni",
+              "displayName": "Isi Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "b2d0aadb-9086-47e7-9be3-f2d433c4a835",
+      "name": "SaveTestimoniToSheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        19888,
+        3728
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}",
+            "Status Testimoni": "Selesai"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c31bea7c-c416-42ab-a8e6-779eb24efe06",
+      "name": "ResetStatusTestimoni",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        20176,
+        3728
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $('NormalizePhoneNumber').first().json.phone_normalized }}"
+            },
+            {
+              "name": "message",
+              "value": "Makasih banyak masukannya kak 🙏 Kalau berkenan, boleh banget dibantu review juga di Google Maps kami: https://www.google.com/search?q=gmap+pizza+mako&oq=gmap+pizza+mako&gs_lcrp=EgZjaHJvbWUyBggAEEUYOTIHCAEQIRiPAjIHCAIQIRiPAtIBCDcxOTFqMGo3qAIAsAIA&sourceid=chrome&source=chrome.ob&ie=UTF-8#lrd=0x2e7a57ed64daac2f:0x4ec48ed613cad1df,3,,,, - sangat membantu banget buat kami 🍕"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d0e77398-e5b4-49fe-a3f5-0d9860e2434d",
+      "name": "ReplyThanksForTestimoni",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        20464,
+        3728
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "e9760e4e-c749-4b03-a2e9-f154be844925",
+      "name": "StopTestimoniHandled",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20752,
+        3728
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Nama: {{ $('LookupCRMCustomer').first().json.Nama || 'Tidak diketahui' }}\nPelanggan lama: {{ $('LookupCRMCustomer').first().json['Nomor WA'] ? 'Ya' : 'Tidak' }}\nMenu tersedia: {{ JSON.stringify($('GetCachedMenu').first().json.menu) }}\nAlamat outlet/lokasi saat ini: {{ $('FetchJadwalOperasional').first().json.Alamat || 'belum diisi' }}\nCOD tersedia: {{ $('FetchGlobalBotSetting').first().json['COD Aktif'] === 'TRUE' ? 'Ya' : 'Tidak' }}\nPesan: {{ $('NormalizePhoneNumber').first().json.message_text }}\n",
+        "options": {
+          "systemMessage": "Kamu adalah asisten WhatsApp untuk Pisza Mako, bisnis kuliner pizza rumahan.\nTugasmu: menjawab pertanyaan pelanggan soal menu, dan membantu proses order.\n\nATURAN:\n1. Gunakan HANYA data menu yang ada di context - jangan mengarang menu atau harga.\n2. Selalu sapa pelanggan dengan \"kak\", apapun sapaan yang mereka pakai ke kamu (walau dipanggil \"pak\"/\"bu\", tetap balas pakai \"kak\").\n3. Kalau pelanggan menunjukkan niat mau order (\"mau pesan\", \"aku order\", dst) dan belum kasih detail lengkap, JANGAN tanya satu-satu field. Langsung kirim SATU pesan berisi form isian singkat, kira-kira begini:\n\n\"Oke kak, untuk order, tolong isi ini ya:\n- Menu & jumlah:\n- Catatan (kalau ada):\n- Cara ambil (Diambil Sendiri/COD/GoSend):\n- Cara bayar (Cash/QRIS):\n- Atas nama:\"\n\nSesuaikan baris \"Cara ambil\" - JANGAN cantumkan opsi COD di form kalau context bilang COD lagi tidak aktif.\n\n3a. Kalau pelanggan sudah balas form itu (lengkap sekaligus atau nyicil beberapa pesan), gabungkan semua info yang sudah didapat. Kalau masih ada yang kurang, tanya SPESIFIK cuma bagian yang belum terisi - jangan kirim ulang form lengkap.\n3b. Catatan khusus per item (misal \"tanpa nanas\") dicatat di field \"catatan\" item itu. Kalau kosong, isi string kosong \"\" - JANGAN bilang \"catatan sudah kosong\" (bisa disalahartikan \"menu kosong\"/stok habis) - kalau perlu, bilang \"tanpa catatan tambahan ya\" sebagai gantinya.\n3c. Metode kirim ada 3: \"Diambil Sendiri\", \"COD\" (admin yang antar langsung, bayar cash, ongkir dihitung admin manual - HANYA ditawarkan kalau context bilang COD lagi aktif; minta alamat lengkap pengiriman, simpan di field \"alamat_pengiriman\"), \"GoSend\" (pelanggan pesan GoSend sendiri setelah order dikonfirmasi, Penting kalau GoSend WAJIB bayar QRIS karena kita tidak pegang cash di titik itu).\n3d. Metode bayar: \"Cash\" atau \"QRIS\". Kalau QRIS, kasih tau kode QR dikirim terpisah setelah order dikonfirmasi, minta kirim bukti pembayaran setelah transfer.\n3e. Kalau ditanya rekomendasi, sebutkan menu yang \"Rekomendasi\"-nya true di context. Kalau tidak ada yang ditandai, jujur bilang belum ada rekomendasi khusus hari ini.\n3f. Cek \"Stok Tersisa\" tiap menu di context. Kalau pelanggan minta lebih dari stok yang ada, kasih tau jumlah sisa yang sebenarnya, jangan langsung diiyakan.\n4. Begitu semua detail order (menu, jumlah, nama, cara ambil, cara bayar) lengkap, rangkum semuanya dan MINTA KONFIRMASI eksplisit sebelum dianggap final.\n5. Jangan pernah set status \"confirmed\" kecuali pelanggan sudah jelas bilang setuju/iya DAN semua field wajib sudah terisi.\n6. Kalau pelanggan adalah pelanggan lama (ada di context), sapa lebih personal, boleh tawarkan \"mau pesan yang biasa?\".\n7. Balas dalam Bahasa Indonesia, santai tapi sopan, gaya pemilik warung membalas WA - jangan kaku seperti bot formal.\n8. Kalau ada komplain, JANGAN coba selesaikan sendiri - ini seharusnya sudah tersaring sebelum sampai ke kamu.\n9. Kalau pelanggan cuma membalas basa-basi penutup (misal \"makasih\", \"oke\", \"sip\", \"ditunggu ya\") tanpa pertanyaan/order baru, balas singkat dan ramah - jangan ulangi rangkuman order/menu, jangan ubah status dari konteks sebelumnya.\n10. Kalau ditanya alamat/lokasi/\"dimana\", SALIN PERSIS nilai \"Alamat outlet/lokasi saat ini\" dari context apa adanya - JANGAN diringkas, ditafsirkan, atau diubah. Kalau berupa link, kirim link itu utuh.\n11. Kalau balasanmu menyebut/menampilkan daftar menu (baik murni tanya menu atau dicampur order), set \"kirim_foto_menu\": true. Jika pelanggan bertanya soal menu, ambil dan tuliskan daftar menu serta harganya secara jelas di dalam teks balasan berdasarkan data menu yang ada di context, agar pelanggan bisa langsung membacanya lewat chat.\n12. Kalau pelanggan menyebut tanggal/hari pengiriman tertentu (misal \"besok\", \"hari kamis\", tanggal spesifik) ATAU total jumlah pesanan lebih dari 30 pcs, JANGAN confirm sendiri. Set status \"asking\", set \"perlu_eskalasi_admin\": true, isi \"alasan_eskalasi\": \"Pre-Order/Pesanan Besar\", dan bilang ke pelanggan kamu catat dulu, admin yang akan konfirmasi ketersediaannya.\n13. Kalau pelanggan tanya hal yang sama sekali di luar konteks menu/order/bisnis (misal minta izin bikin konten di outlet), jangan coba jawab sendiri - bilang pertanyaan itu akan diteruskan ke admin, set \"perlu_eskalasi_admin\": true, \"alasan_eskalasi\": \"Pertanyaan Lain-lain\".\n\nFORMAT OUTPUT WAJIB:\nBalas HANYA dengan JSON valid, TANPA teks lain di luar JSON, TANPA markdown code fence (jangan pakai ```). Ikuti struktur persis ini:\n{\"reply\": \"teks balasan ke pelanggan\", \"status\": \"asking atau confirmed\", \"kirim_foto_menu\": true atau false, \"perlu_eskalasi_admin\": true atau false, \"alasan_eskalasi\": \"\" atau alasan singkat, \"order_detail\": {\"items\": [{\"menu\": \"...\", \"qty\": 1, \"catatan\": \"\"}], \"total\": 0, \"nama\": \"\", \"metode_kirim\": \"\", \"metode_bayar\": \"\", \"alamat_pengiriman\": \"\"} atau null kalau belum ada order}"
+        }
+      },
+      "id": "f59c32c0-49d7-48fb-8364-98fd4ffd7ba1",
+      "name": "RunOrderAgentGemini",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        21040,
+        4096
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "ReceiveWhatsAppMessage": {
+      "main": [
+        [
+          {
+            "node": "NormalizePhoneNumber",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NormalizePhoneNumber": {
+      "main": [
+        [
+          {
+            "node": "FetchGlobalBotSetting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DebounceIncomingMessage": {
+      "main": [
+        [
+          {
+            "node": "FetchJadwalOperasional",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchJadwalOperasional": {
+      "main": [
+        [
+          {
+            "node": "CheckOperatingHours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckOperatingHours": {
+      "main": [
+        [
+          {
+            "node": "RouteByOperatingHours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RouteByOperatingHours": {
+      "main": [
+        [
+          {
+            "node": "GetCachedMenu",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SendClosedNotice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SendClosedNotice": {
+      "main": [
+        [
+          {
+            "node": "StopClosed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetCachedMenu": {
+      "main": [
+        [
+          {
+            "node": "LookupCRMCustomer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LookupCRMCustomer": {
+      "main": [
+        [
+          {
+            "node": "CheckIfAwaitingTestimonial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "llama-3.1-8b-instant (Groq)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "ClassifyIntent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ClassifyIntent": {
+      "main": [
+        [
+          {
+            "node": "RouteByIntent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RouteByIntent": {
+      "main": [
+        [
+          {
+            "node": "PauseBotForCustomer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "RunOrderAgent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EscalateToOwner": {
+      "main": [
+        [
+          {
+            "node": "StopEscalated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SessionMemoryByPhone": {
+      "ai_memory": [
+        [
+          {
+            "node": "RunOrderAgent",
+            "type": "ai_memory",
+            "index": 0
+          },
+          {
+            "node": "RunOrderAgentGemini",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RunOrderAgent": {
+      "main": [
+        [
+          {
+            "node": "ParseAgentOutput",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "RunOrderAgentGemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RouteByStatus": {
+      "main": [
+        [
+          {
+            "node": "ValidateOrderData",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SendReplyOnly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SendReplyOnly": {
+      "main": [
+        [
+          {
+            "node": "CheckIfMenuQuestion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ValidateOrderData": {
+      "main": [
+        [
+          {
+            "node": "CheckOrderValid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckOrderValid": {
+      "main": [
+        [
+          {
+            "node": "AppendToAutoOrder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "UpsertCRMRecord",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PrepareStockDecrement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SendClarificationRequest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SendClarificationRequest": {
+      "main": [
+        [
+          {
+            "node": "StopInvalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AppendToAutoOrder": {
+      "main": [
+        [
+          {
+            "node": "MergeSaveResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UpsertCRMRecord": {
+      "main": [
+        [
+          {
+            "node": "MergeSaveResults",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "MergeSaveResults": {
+      "main": [
+        [
+          {
+            "node": "SendOrderConfirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckBotActive": {
+      "main": [
+        [
+          {
+            "node": "ForwardPausedMessageToOwner",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ClassifyIntent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PauseBotForCustomer": {
+      "main": [
+        [
+          {
+            "node": "EscalateToOwner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckIfMediaMessage": {
+      "main": [
+        [
+          {
+            "node": "PauseBotForPaymentReview",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DebounceIncomingMessage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PauseBotForPaymentReview": {
+      "main": [
+        [
+          {
+            "node": "NotifyOwnerPaymentProof",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NotifyOwnerPaymentProof": {
+      "main": [
+        [
+          {
+            "node": "ReplyProofReceived",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ReplyProofReceived": {
+      "main": [
+        [
+          {
+            "node": "StopMediaHandled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SendOrderConfirmation": {
+      "main": [
+        [
+          {
+            "node": "CheckIfQRISPayment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckIfQRISPayment": {
+      "main": [
+        [
+          {
+            "node": "FetchQRISImage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "StopNoQRIS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchQRISImage": {
+      "main": [
+        [
+          {
+            "node": "SendQRISToCustomer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchGlobalBotSetting": {
+      "main": [
+        [
+          {
+            "node": "CheckGlobalBotOn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckGlobalBotOn": {
+      "main": [
+        [
+          {
+            "node": "StopGlobalOff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CheckIfMediaMessage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ForwardPausedMessageToOwner": {
+      "main": [
+        [
+          {
+            "node": "StopBotPaused",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckIfMenuQuestion": {
+      "main": [
+        [
+          {
+            "node": "FetchMenuPhoto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "StopNoMenuPhoto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchMenuPhoto": {
+      "main": [
+        [
+          {
+            "node": "SendMenuPhotoToCustomer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SendMenuPhotoToCustomer": {
+      "main": [
+        [
+          {
+            "node": "StopAsking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "StopNoMenuPhoto": {
+      "main": [
+        [
+          {
+            "node": "StopAsking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ParseAgentOutput": {
+      "main": [
+        [
+          {
+            "node": "CheckParseSuccess",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckParseSuccess": {
+      "main": [
+        [
+          {
+            "node": "PauseBotForParseFailure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CheckNeedsEscalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PauseBotForParseFailure": {
+      "main": [
+        [
+          {
+            "node": "NotifyOwnerParseFailure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NotifyOwnerParseFailure": {
+      "main": [
+        [
+          {
+            "node": "ReplyParseFailureToCustomer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ReplyParseFailureToCustomer": {
+      "main": [
+        [
+          {
+            "node": "StopParseFailed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepareStockDecrement": {
+      "main": [
+        [
+          {
+            "node": "DecrementMenuStock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DecrementMenuStock": {
+      "main": [
+        [
+          {
+            "node": "RefreshCacheAfterStockChange",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RefreshCacheAfterStockChange": {
+      "main": [
+        [
+          {
+            "node": "MergeSaveResults",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "CheckNeedsEscalation": {
+      "main": [
+        [
+          {
+            "node": "SendReplyForEscalatedCase",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "RouteByStatus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SendReplyForEscalatedCase": {
+      "main": [
+        [
+          {
+            "node": "PauseBotForAdminEscalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PauseBotForAdminEscalation": {
+      "main": [
+        [
+          {
+            "node": "NotifyOwnerGeneralEscalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NotifyOwnerGeneralEscalation": {
+      "main": [
+        [
+          {
+            "node": "StopGeneralEscalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "openai/gpt-oss-120b (Groq)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "RunOrderAgent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini 2.5 Flash (Fallback)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "RunOrderAgentGemini",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CheckIfAwaitingTestimonial": {
+      "main": [
+        [
+          {
+            "node": "SaveTestimoniToSheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CheckBotActive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SaveTestimoniToSheet": {
+      "main": [
+        [
+          {
+            "node": "ResetStatusTestimoni",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ResetStatusTestimoni": {
+      "main": [
+        [
+          {
+            "node": "ReplyThanksForTestimoni",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ReplyThanksForTestimoni": {
+      "main": [
+        [
+          {
+            "node": "StopTestimoniHandled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RunOrderAgentGemini": {
+      "main": [
+        [
+          {
+            "node": "ParseAgentOutput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

@@ -1,0 +1,307 @@
+{
+  "name": "PZM-TEST - Chat Trial (Testing Prompt)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🧪 PZM-TEST — Chat Trial (Testing Prompt Saja)\n\n**Fungsi:** trial obrolan sama AI Agent pakai jendela chat bawaan n8n -\nTANPA WhatsApp, TANPA Fonnte, TANPA Postman. Buat ngetes apakah system\nprompt sudah pas sebelum sungguhan dipakai di PZM-01.\n\n**Cara pakai:**\n1. Klik tombol \"Chat\" di kiri bawah canvas (atau \"Open Chat\" di node\n   TrialChatTrigger) untuk buka jendela chat.\n2. Ngobrol bebas kayak jadi pelanggan - coba tanya menu, order, kasih\n   catatan khusus, ganti-ganti metode bayar/kirim, coba basa-basi\n   penutup, dll.\n3. Balasan yang muncul di chat berisi 2 bagian: teks balasan AI (yang\n   BENERAN akan dilihat pelanggan), dan blok DEBUG di bawahnya (status,\n   order_detail, kirim_foto_menu) - blok debug ini CUMA buat kamu liat\n   di sini, nggak pernah muncul di WA asli.\n\n**PENTING - workflow ini TERPISAH dari PZM-01:**\n- Perubahan system prompt di sini TIDAK otomatis kepakai di PZM-01 -\n  kalau hasil testnya bagus, kamu perlu COPY manual prompt yang sudah\n  diedit ke node RunOrderAgent di PZM-01.\n- Menu diambil LIVE dari Google Sheet (bukan cache), jadi selalu up to\n  date, tapi means: pastikan SPREADSHEET_ID_HERE sudah diisi.\n- Nggak ada simulasi CRM (selalu dianggap \"pelanggan baru\") dan nggak\n  ada pengiriman gambar QRIS/menu beneran - fokusnya murni ngetes teks\n  percakapan & field yang di-extract AI.\n\n**Dependencies:**\n- Credential: Groq API, Google Sheets OAuth2\n",
+        "height": 620,
+        "width": 560
+      },
+      "id": "2d4c994d-7b0e-44c8-80a2-90b9830b73d5",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        4864,
+        2912
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "a78f7cee-3f00-448b-8ca6-943a8917f388",
+      "name": "TrialChatTrigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        5088,
+        3376
+      ],
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 540915066,
+          "mode": "list",
+          "cachedResultName": "Katalog Menu",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=540915066"
+        },
+        "options": {}
+      },
+      "id": "820b8423-52f6-4e44-8501-e8658425d9ca",
+      "name": "FetchMenuForTrial",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        5312,
+        3280
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const menu = $input.all().map(i => i.json);\nconst chatInput = $('TrialChatTrigger').first().json;\nconst addressRow = $('FetchActiveAddressForTrial').first().json;\nconst alamat = (addressRow && addressRow['Alamat']) || 'belum diisi';\nreturn [{ json: {\n  menu,\n  alamat,\n  chatInput: chatInput.chatInput,\n  sessionId: chatInput.sessionId\n} }];"
+      },
+      "id": "ea38dad6-803e-4360-83b5-0d5a4ccbd475",
+      "name": "PrepareTrialContext",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5760,
+        3376
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Menu tersedia: {{ JSON.stringify($json.menu) }}\nAlamat outlet/lokasi saat ini: {{ $json.alamat }}\nPesan pelanggan: {{ $json.chatInput }}\nCOD : TRUE",
+        "options": {
+          "systemMessage": "Kamu adalah asisten WhatsApp untuk Pisza Mako, bisnis kuliner pizza rumahan.\nTugasmu: menjawab pertanyaan pelanggan soal menu, dan membantu proses order.\n\nATURAN:\n1. Gunakan HANYA data menu yang ada di context - jangan mengarang menu atau harga.\n2. Selalu sapa pelanggan dengan \"kak\", apapun sapaan yang mereka pakai ke kamu (walau dipanggil \"pak\"/\"bu\", tetap balas pakai \"kak\").\n3. Kalau pelanggan menunjukkan niat mau order (\"mau pesan\", \"aku order\", dst) dan belum kasih detail lengkap, JANGAN tanya satu-satu field. Langsung kirim SATU pesan berisi form isian singkat, kira-kira begini:\n\n\"Oke kak, untuk order, tolong isi ini ya:\n- Menu & jumlah:\n- Catatan (kalau ada):\n- Cara ambil (Diambil Sendiri/COD/GoSend):\n- Cara bayar (Cash/QRIS):\n- Atas nama:\"\n\nSesuaikan baris \"Cara ambil\" - JANGAN cantumkan opsi COD di form kalau context bilang COD lagi tidak aktif.\n\n3a. Kalau pelanggan sudah balas form itu (lengkap sekaligus atau nyicil beberapa pesan), gabungkan semua info yang sudah didapat. Kalau masih ada yang kurang, tanya SPESIFIK cuma bagian yang belum terisi - jangan kirim ulang form lengkap.\n3b. Catatan khusus per item (misal \"tanpa nanas\") dicatat di field \"catatan\" item itu. Kalau kosong, isi string kosong \"\" - JANGAN bilang \"catatan sudah kosong\" (bisa disalahartikan \"menu kosong\"/stok habis) - kalau perlu, bilang \"tanpa catatan tambahan ya\" sebagai gantinya.\n3c. Metode kirim ada 3: \"Diambil Sendiri\", \"COD\" (admin yang antar langsung, bayar cash, ongkir dihitung admin manual - HANYA ditawarkan kalau context bilang COD lagi aktif; minta alamat lengkap pengiriman, simpan di field \"alamat_pengiriman\"), \"GoSend\" (pelanggan pesan GoSend sendiri setelah order dikonfirmasi, Penting kalau GoSend WAJIB bayar QRIS karena kita tidak pegang cash di titik itu).\n3d. Metode bayar: \"Cash\" atau \"QRIS\". Kalau QRIS, kasih tau kode QR dikirim terpisah setelah order dikonfirmasi, minta kirim bukti pembayaran setelah transfer.\n3e. Kalau ditanya rekomendasi, sebutkan menu yang \"Rekomendasi\"-nya true di context. Kalau tidak ada yang ditandai, jujur bilang belum ada rekomendasi khusus hari ini.\n3f. Cek \"Stok Tersisa\" tiap menu di context. Kalau pelanggan minta lebih dari stok yang ada, kasih tau jumlah sisa yang sebenarnya, jangan langsung diiyakan.\n4. Begitu semua detail order (menu, jumlah, nama, cara ambil, cara bayar) lengkap, rangkum semuanya dan MINTA KONFIRMASI eksplisit sebelum dianggap final.\n5. Jangan pernah set status \"confirmed\" kecuali pelanggan sudah jelas bilang setuju/iya DAN semua field wajib sudah terisi.\n6. Kalau pelanggan adalah pelanggan lama (ada di context), sapa lebih personal, boleh tawarkan \"mau pesan yang biasa?\".\n7. Balas dalam Bahasa Indonesia, santai tapi sopan, gaya pemilik warung membalas WA - jangan kaku seperti bot formal.\n8. Kalau ada komplain, JANGAN coba selesaikan sendiri - ini seharusnya sudah tersaring sebelum sampai ke kamu.\n9. Kalau pelanggan cuma membalas basa-basi penutup (misal \"makasih\", \"oke\", \"sip\", \"ditunggu ya\") tanpa pertanyaan/order baru, balas singkat dan ramah - jangan ulangi rangkuman order/menu, jangan ubah status dari konteks sebelumnya.\n10. Kalau ditanya alamat/lokasi/\"dimana\", SALIN PERSIS nilai \"Alamat outlet/lokasi saat ini\" dari context apa adanya - JANGAN diringkas, ditafsirkan, atau diubah. Kalau berupa link, kirim link itu utuh.\n11. Kalau balasanmu menyebut/menampilkan daftar menu (baik murni tanya menu atau dicampur order), set \"kirim_foto_menu\": true. Kalau balasan itu MURNI soal menu (bukan lagi proses order aktif), buat teks balasannya SINGKAT saja, cukup arahkan ke foto (misal \"Cek foto menu di atas ya kak, ada yang mau dipesan? 😊\") - JANGAN tulis ulang semua item dan harga di teks, karena foto sudah menunjukkan itu semua.\n12. Kalau pelanggan menyebut tanggal/hari pengiriman tertentu (misal \"besok\", \"hari kamis\", tanggal spesifik) ATAU total jumlah pesanan lebih dari 30 pcs, JANGAN confirm sendiri. Set status \"asking\", set \"perlu_eskalasi_admin\": true, isi \"alasan_eskalasi\": \"Pre-Order/Pesanan Besar\", dan bilang ke pelanggan kamu catat dulu, admin yang akan konfirmasi ketersediaannya.\n13. Kalau pelanggan tanya hal yang sama sekali di luar konteks menu/order/bisnis (misal minta izin bikin konten di outlet), jangan coba jawab sendiri - bilang pertanyaan itu akan diteruskan ke admin, set \"perlu_eskalasi_admin\": true, \"alasan_eskalasi\": \"Pertanyaan Lain-lain\".\n\nFORMAT OUTPUT WAJIB:\nBalas HANYA dengan JSON valid, TANPA teks lain di luar JSON, TANPA markdown code fence (jangan pakai ```). Ikuti struktur persis ini:\n{\"reply\": \"teks balasan ke pelanggan\", \"status\": \"asking atau confirmed\", \"kirim_foto_menu\": true atau false, \"perlu_eskalasi_admin\": true atau false, \"alasan_eskalasi\": \"\" atau alasan singkat, \"order_detail\": {\"items\": [{\"menu\": \"...\", \"qty\": 1, \"catatan\": \"\"}], \"total\": 0, \"nama\": \"\", \"metode_kirim\": \"\", \"metode_bayar\": \"\", \"alamat_pengiriman\": \"\"} atau null kalau belum ada order}"
+        }
+      },
+      "id": "a25720ff-d3a1-4ad7-9dc1-f52a35cef61d",
+      "name": "RunOrderAgentTrial",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        5984,
+        3376
+      ]
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "id": "db68afbe-3596-410b-b5d9-7ecc0dbb02d8",
+      "name": "openai/gpt-oss-120b (Groq) Trial",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        6000,
+        3616
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "GROQ_CRED_ID",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('TrialChatTrigger').first().json.sessionId }}"
+      },
+      "id": "e89504d8-434b-4f3f-a1a9-80628ba122d4",
+      "name": "TrialSessionMemory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        6128,
+        3616
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let out;\ntry {\n  let raw = $json.output || $json.text || '';\n  raw = raw.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();\n  out = JSON.parse(raw);\n} catch (e) {\n  return [{ json: { output: '⚠️ Gagal parse JSON dari AI. Raw output:\\n' + ($json.output || $json.text) } }];\n}\nconst debug = {\n  status: out.status,\n  kirim_foto_menu: out.kirim_foto_menu,\n  order_detail: out.order_detail\n};\nconst display = out.reply + \n  '\\n\\n---\\n\\U0001F9EA DEBUG (cuma keliatan di sini, bukan di WA asli):\\n' +\n  JSON.stringify(debug, null, 2);\nreturn [{ json: { output: display } }];"
+      },
+      "id": "43cbb2d5-8b8a-4604-8cb7-93213190bef2",
+      "name": "FormatTrialDisplay",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6336,
+        3376
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1045895638,
+          "mode": "list",
+          "cachedResultName": "Jadwal Operasional",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1045895638"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Status",
+              "lookupValue": "Aktif"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4b325b18-755f-4e7a-ac21-1252ae87d544",
+      "name": "FetchActiveAddressForTrial",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        5312,
+        3472
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "id": "da31a896-09a2-46aa-80da-e29de2cafc12",
+      "name": "WaitForMenuAndAddress",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        5536,
+        3376
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TrialChatTrigger": {
+      "main": [
+        [
+          {
+            "node": "FetchMenuForTrial",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "FetchActiveAddressForTrial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchMenuForTrial": {
+      "main": [
+        [
+          {
+            "node": "WaitForMenuAndAddress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepareTrialContext": {
+      "main": [
+        [
+          {
+            "node": "RunOrderAgentTrial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TrialSessionMemory": {
+      "ai_memory": [
+        [
+          {
+            "node": "RunOrderAgentTrial",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RunOrderAgentTrial": {
+      "main": [
+        [
+          {
+            "node": "FormatTrialDisplay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "openai/gpt-oss-120b (Groq) Trial": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "RunOrderAgentTrial",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchActiveAddressForTrial": {
+      "main": [
+        [
+          {
+            "node": "WaitForMenuAndAddress",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "WaitForMenuAndAddress": {
+      "main": [
+        [
+          {
+            "node": "PrepareTrialContext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

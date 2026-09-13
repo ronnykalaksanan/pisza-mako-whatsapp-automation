@@ -1,0 +1,191 @@
+{
+  "name": "PZM-00 - Menu Cache Refresh [Demo]",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📌 PZM-00 — Menu Cache Refresh [Demo]\n\n**Owned By:** [Nama kamu / Pisza Mako]\n**Last Updated:** 2026-09-02\n\n**Description:**\nRefresh cache katalog menu tiap 1 jam ke n8n static data, supaya PZM-01\ntidak perlu fetch Google Sheets tiap chat masuk (mengurangi latency).\n\n**Flow Steps:**\n1a. Cron tiap 1 jam (safety net, untuk edit manual langsung di Sheet)\n1b. ATAU webhook dipanggil frontend segera setelah toggle menu (update instan)\n2. Fetch tab Katalog Menu\n3. Simpan ke static data (scope: workflow ini sendiri)\n\n**PENTING:** static data n8n TIDAK dibagi lintas workflow. PZM-01 tidak baca static data ini langsung - PZM-01 memanggil workflow ini lewat node 'Execute Workflow', masuk lewat trigger 'ReceiveMenuCacheRequest' di bawah, yang balikin isi cache saat itu juga.\n\n**Dependencies:**\n- Credential: Google Sheets OAuth2\n- Global Error Workflow: ErrorHandler [Global]\n",
+        "height": 604,
+        "width": 704
+      },
+      "id": "6fdbec87-2970-4842-a62b-11d457414521",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -352,
+        -496
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "29be5151-1964-4b23-8471-d1b6eac49edf",
+      "name": "CronRefreshMenuCache",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        304,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 540915066,
+          "mode": "list",
+          "cachedResultName": "Katalog Menu",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=540915066"
+        },
+        "options": {}
+      },
+      "id": "37fe1a26-8604-4d43-b24b-03ce8335bae1",
+      "name": "FetchKatalogMenu",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        528,
+        304
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.menuCache = $input.all().map(i => i.json);\nstaticData.menuCacheUpdatedAt = new Date().toISOString();\nreturn [{ json: { cached_items: staticData.menuCache.length } }];"
+      },
+      "id": "536a4b30-fabf-4964-a373-d5cbc0004fcc",
+      "name": "WriteMenuCache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pizza-mako-refresh-menu-cache",
+        "options": {}
+      },
+      "id": "9dd90965-e9cf-4feb-97c5-7dd58057e62a",
+      "name": "TriggerCacheRefreshNow",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        304,
+        400
+      ],
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "a23150ee-ebe4-4394-b813-65a0d9925093",
+      "name": "ReceiveMenuCacheRequest",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        304,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nreturn [{ json: { menu: staticData.menuCache || [] } }];"
+      },
+      "id": "322b779f-a69c-4b71-be47-2d208f81c9bb",
+      "name": "ReturnCachedMenu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        624
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "CronRefreshMenuCache": {
+      "main": [
+        [
+          {
+            "node": "FetchKatalogMenu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchKatalogMenu": {
+      "main": [
+        [
+          {
+            "node": "WriteMenuCache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TriggerCacheRefreshNow": {
+      "main": [
+        [
+          {
+            "node": "FetchKatalogMenu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ReceiveMenuCacheRequest": {
+      "main": [
+        [
+          {
+            "node": "ReturnCachedMenu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

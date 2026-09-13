@@ -1,0 +1,270 @@
+{
+  "name": "PZM-04 - Auto Resume Bot [Demo]",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📌 PZM-04 — Auto Resume Bot [Demo]\n\n**Owned By:** [Ronny Ardiansyah Kalaksanan / Pisza Mako]\n**Last Updated:** 2026-09-02\n\n**Description:**\nJalan tiap 15 menit, cari nomor CRM yang bot-nya lagi dijeda (Bot Aktif=FALSE)\nlebih dari 2 jam, otomatis nyalain lagi - jaga-jaga kalau admin lupa toggle\nmanual balik.\n\n**Flow Steps:**\n1. Cron tiap 15 menit\n2. Baca semua row CRM\n3. Filter yang Bot Aktif=FALSE dan Bot Dijeda Sejak > 2 jam lalu\n4. Set Bot Aktif=TRUE untuk row-row itu\n\n**Dependencies:**\n- Credential: Google Sheets OAuth2\n- Global Error Workflow: ErrorHandler [Global]\n",
+        "height": 564,
+        "width": 528
+      },
+      "id": "3e7cee64-03cf-403e-8733-80420d5d2ffa",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        16,
+        -448
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "d17ef24b-faa3-4bc6-83c2-17678954e988",
+      "name": "TriggerAutoResumeCheck",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        304,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "options": {}
+      },
+      "id": "ec674593-8257-4f85-894e-3adc56ed0d45",
+      "name": "FetchAllCRMRows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        528,
+        224
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = DateTime.now();\nconst rows = $input.all().map(i => i.json);\nconst expired = rows.filter(r => {\n  if (r['Bot Aktif'] !== 'FALSE') return false;\n  const pausedAt = r['Bot Dijeda Sejak'];\n  if (!pausedAt) return false;\n  const diffHours = now.diff(DateTime.fromISO(pausedAt), 'hours').hours;\n  return diffHours >= 2;\n});\nreturn expired.map(r => ({ json: r }));"
+      },
+      "id": "d1730ca2-a54b-465f-93cd-b70ffdbd77f0",
+      "name": "FilterExpiredPauses",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $json['Nomor WA'] }}",
+            "Bot Aktif": "TRUE"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "4ea9671b-0978-47d5-a88b-8b4053e6727b",
+      "name": "ResumeBotForCustomer",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        976,
+        224
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TriggerAutoResumeCheck": {
+      "main": [
+        [
+          {
+            "node": "FetchAllCRMRows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchAllCRMRows": {
+      "main": [
+        [
+          {
+            "node": "FilterExpiredPauses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FilterExpiredPauses": {
+      "main": [
+        [
+          {
+            "node": "ResumeBotForCustomer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

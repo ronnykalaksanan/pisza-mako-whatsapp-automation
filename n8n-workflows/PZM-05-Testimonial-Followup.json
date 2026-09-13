@@ -1,0 +1,319 @@
+{
+  "name": "PZM-05 - Testimonial Follow-up H+1 [Demo]",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📌 PZM-05 — Testimonial Follow-up H+1 [Demo]\n\n**Owned By:** [Nama kamu / Pisza Mako]\n**Last Updated:** 2026-09-09\n\n**Description:**\nJalan tiap pagi, cari pelanggan yang order-nya KEMARIN (last_order_date = H-1),\nkirim WA nanya testimoni. Balasan mereka ditangkap otomatis oleh PZM-01\n(node CheckIfAwaitingTestimonial) dan disimpan ke tab Testimoni.\n\n**Flow Steps:**\n1. Cron tiap pagi (misal 10:00 WIB)\n2. Baca semua row CRM\n3. Filter last_order_date = kemarin\n4. Set Status Testimoni = \"Ditanya\" per nomor yang match\n5. Kirim WA nanya testimoni\n\n**Dependencies:**\n- Credential: Google Sheets OAuth2, Fonnte API\n- Perlu tab baru \"Testimoni\" (Timestamp, Nomor WA, Nama, Isi Testimoni)\n- Perlu kolom baru \"Status Testimoni\" di tab CRM\n- Terhubung ke PZM-01 (node CheckIfAwaitingTestimonial) untuk nangkep balesan\n",
+        "height": 612,
+        "width": 632
+      },
+      "id": "4c28ce4c-2c75-4ef7-b1ed-70738e7108b7",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        -432
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        }
+      },
+      "id": "ea45a18e-cf82-44ea-a4f6-9c16a46117e0",
+      "name": "TriggerTestimonialFollowUp",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        368,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "options": {}
+      },
+      "id": "c3e44339-a3e2-435e-bd6e-7110531ad6cb",
+      "name": "FetchAllCRMForTestimonial",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        592,
+        288
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const yesterday = DateTime.now().setZone('Asia/Jakarta').minus({ days: 1 }).toFormat('yyyy-MM-dd');\nconst rows = $input.all().map(i => i.json);\nconst matched = rows.filter(r => r.last_order_date === yesterday);\nreturn matched.map(r => ({ json: r }));"
+      },
+      "id": "55b58c5e-4eeb-4cb2-9ff5-998f385efb00",
+      "name": "FilterYesterdayOrders",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1496634999,
+          "mode": "list",
+          "cachedResultName": "CRM",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=1496634999"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nomor WA": "={{ $json['Nomor WA'] }}",
+            "Status Testimoni": "Ditanya"
+          },
+          "matchingColumns": [
+            "Nomor WA"
+          ],
+          "schema": [
+            {
+              "id": "Nomor WA",
+              "displayName": "Nomor WA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama",
+              "displayName": "Nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "total_order",
+              "displayName": "total_order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_order_date",
+              "displayName": "last_order_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Aktif",
+              "displayName": "Bot Aktif",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Bot Dijeda Sejak",
+              "displayName": "Bot Dijeda Sejak",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Alasan Jeda",
+              "displayName": "Alasan Jeda",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status Testimoni",
+              "displayName": "Status Testimoni",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "372887d4-b97d-40b6-90d9-2f4a2b9a72ba",
+      "name": "MarkStatusTestimoniDitanya",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1040,
+        288
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "={{ $json['Nomor WA'] }}"
+            },
+            {
+              "name": "message",
+              "value": "=Halo kak {{ $json.Nama || '' }}, gimana rasanya pizza kemarin? Boleh dong kasih tau kesan-kesannya ya, biar kami makin baik 😊"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "60c20c77-106d-42d4-81a7-bcb1a8c1ff59",
+      "name": "SendTestimonialRequest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1264,
+        288
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TriggerTestimonialFollowUp": {
+      "main": [
+        [
+          {
+            "node": "FetchAllCRMForTestimonial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchAllCRMForTestimonial": {
+      "main": [
+        [
+          {
+            "node": "FilterYesterdayOrders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FilterYesterdayOrders": {
+      "main": [
+        [
+          {
+            "node": "MarkStatusTestimoniDitanya",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MarkStatusTestimoniDitanya": {
+      "main": [
+        [
+          {
+            "node": "SendTestimonialRequest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

@@ -1,0 +1,320 @@
+{
+  "name": "PZM-02 - Nightly Report [Demo]",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📌 PZM-02 — Nightly Report [Demo]\n\n**Owned By:** [Nama kamu / Pisza Mako]\n**Last Updated:** 2026-09-02\n\n**Description:**\nJalan tiap malam, rekap omset/jumlah order/menu terlaris dari tab\nAuto-Order, kirim ke WA pemilik via Fonnte.\n\n**Flow Steps:**\n1. Cron trigger (tiap malam, 22:00 WIB)\n2. Ambil semua row Auto-Order hari itu\n3. Hitung agregat (total omset, jumlah order, menu terlaris)\n4. Simpan hasil agregat ke tab Rekap Harian (untuk dashboard frontend)\n5. Format ringkasan teks\n6. Kirim ke WA pemilik via Fonnte\n\n**Dependencies:**\n- Credential: Google Sheets OAuth2\n- Credential: Fonnte API (Header Auth)\n- Global Error Workflow: ErrorHandler [Global]\n\n**Ganti sebelum jalan:**\n- SPREADSHEET_ID_HERE, FONNTE_ENDPOINT_HERE, OWNER_WHATSAPP_NUMBER_HERE\n",
+        "height": 668,
+        "width": 724
+      },
+      "id": "bd5a552b-86b7-4b00-b2de-0070eff800af",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        -544
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * *"
+            }
+          ]
+        }
+      },
+      "id": "fb3e9d3d-7eea-4501-b0ab-f1eb62f9d85c",
+      "name": "TriggerNightlyReport",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        304,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 78269982,
+          "mode": "list",
+          "cachedResultName": "Auto-Order",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=78269982"
+        },
+        "options": {}
+      },
+      "id": "5eeb1961-aeda-4e6f-a807-3b0cdb62e78c",
+      "name": "FetchTodayOrders",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        528,
+        224
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = $now.setZone('Asia/Jakarta').toFormat('yyyy-MM-dd');\nconst rows = $input.all().map(i => i.json).filter(r => String(r.Timestamp || '').startsWith(today));\n\nlet totalOmset = 0;\nlet jumlahOrder = rows.length;\nconst menuCount = {};\n\nfor (const r of rows) {\n  totalOmset += Number(r.Total) || 0;\n  let items = [];\n  try { items = JSON.parse(r['Detail Item'] || '[]'); } catch (e) { items = []; }\n  for (const it of items) {\n    const key = it.menu || 'Tidak diketahui';\n    menuCount[key] = (menuCount[key] || 0) + (it.qty || 1);\n  }\n}\n\nlet terlaris = '-';\nlet maxQty = 0;\nfor (const [menu, qty] of Object.entries(menuCount)) {\n  if (qty > maxQty) { maxQty = qty; terlaris = menu; }\n}\n\nreturn [{ json: { today, totalOmset, jumlahOrder, terlaris, maxQty } }];"
+      },
+      "id": "f2eac868-175b-49c9-a734-c59c3f92ba3a",
+      "name": "CalculateDailySummary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "report_message",
+              "type": "string",
+              "value": "=📊 Rekap Pisza Mako - {{ $json.today }}\\nTotal Omset: Rp{{ $json.totalOmset }}\\nJumlah Order: {{ $json.jumlahOrder }}\\nMenu Terlaris: {{ $json.terlaris }} ({{ $json.maxQty }}x)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "541a858c-d93e-42d2-953f-5c2ba0f66fe2",
+      "name": "FormatReportMessage",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        960,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "OWNER_WHATSAPP_NUMBER_HERE"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.report_message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f241ca91-8ca3-490d-9a59-44a4f315e3f8",
+      "name": "SendReportToOwner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1184,
+        224
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "SPREADSHEET_ID_HERE",
+          "mode": "list",
+          "cachedResultName": "Pisza Mako - Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 2139773954,
+          "mode": "list",
+          "cachedResultName": "Rekap Harian",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_HERE/edit#gid=2139773954"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tanggal": "={{ $json.today }}",
+            "Total Omset": "={{ $json.totalOmset }}",
+            "Jumlah Order": "={{ $json.jumlahOrder }}",
+            "Menu Terlaris": "={{ $json.terlaris }}",
+            "Qty Menu Terlaris": "={{ $json.maxQty }}"
+          },
+          "matchingColumns": [
+            "Tanggal"
+          ],
+          "schema": [
+            {
+              "id": "Tanggal",
+              "displayName": "Tanggal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Total Omset",
+              "displayName": "Total Omset",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Jumlah Order",
+              "displayName": "Jumlah Order",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Menu Terlaris",
+              "displayName": "Menu Terlaris",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Qty Menu Terlaris",
+              "displayName": "Qty Menu Terlaris",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c137b608-01af-44c1-9fb6-e12aba6e81ac",
+      "name": "AppendDailySummaryToSheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        976,
+        416
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CRED_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TriggerNightlyReport": {
+      "main": [
+        [
+          {
+            "node": "FetchTodayOrders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchTodayOrders": {
+      "main": [
+        [
+          {
+            "node": "CalculateDailySummary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CalculateDailySummary": {
+      "main": [
+        [
+          {
+            "node": "FormatReportMessage",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AppendDailySummaryToSheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FormatReportMessage": {
+      "main": [
+        [
+          {
+            "node": "SendReportToOwner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
