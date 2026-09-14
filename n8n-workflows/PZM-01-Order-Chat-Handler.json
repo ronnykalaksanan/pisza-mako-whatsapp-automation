@@ -197,9 +197,9 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "WORKFLOW_ID_PZM00",
+          "value": "C26XNKOxiM6b8Nwz",
           "mode": "list",
-          "cachedResultUrl": "/workflow/WORKFLOW_ID_PZM00",
+          "cachedResultUrl": "/workflow/C26XNKOxiM6b8Nwz",
           "cachedResultName": "PZM-00 - Menu Cache Refresh [Demo]"
         },
         "workflowInputs": {
@@ -292,7 +292,7 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
       "typeVersion": 1,
       "position": [
-        20176,
+        20192,
         4304
       ],
       "credentials": {
@@ -416,7 +416,7 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
       "typeVersion": 1,
       "position": [
-        20688,
+        20704,
         4256
       ],
       "credentials": {
@@ -437,7 +437,7 @@
       "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
       "typeVersion": 1.3,
       "position": [
-        20816,
+        20832,
         4256
       ]
     },
@@ -953,7 +953,7 @@
       "typeVersion": 4.2,
       "position": [
         23632,
-        3392
+        3296
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -1945,15 +1945,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "FONNTE_ENDPOINT_HERE",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "={{ $credentials.apiKey }}"
-            }
-          ]
+          "parameters": []
         },
         "sendBody": true,
         "bodyParameters": {
@@ -1964,7 +1961,7 @@
             },
             {
               "name": "message",
-              "value": "Maaf kak, lagi ada kendala teknis sebentar. Admin akan bantu langsung ya 🙏"
+              "value": "Maaf kak, lagi ada kendala teknis karyawan AI nya, sebentar. Admin akan bantu langsung ya 🙏"
             }
           ]
         },
@@ -1977,7 +1974,13 @@
       "position": [
         22288,
         3632
-      ]
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
     },
     {
       "parameters": {},
@@ -2398,7 +2401,7 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
       "position": [
-        21104,
+        21120,
         4272
       ],
       "credentials": {
@@ -2712,8 +2715,48 @@
       "typeVersion": 1.7,
       "position": [
         21040,
-        4096
+        4048
       ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fonnte.com/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "=OWNER_WHATSAPP_NUMBER_HERE"
+            },
+            {
+              "name": "message",
+              "value": "=🆕 ORDER BARU!\\nNama: {{ $('ValidateOrderData').first().json.nama }}\\nNomor WA: {{ $('ValidateOrderData').first().json.phone_normalized }}\\nItem: {{ $('ValidateOrderData').first().json.order_detail.items.map(i => `${i.menu} x${i.qty}` + (i.catatan ? ` (${i.catatan})` : '')).join(', ') }}\\nTotal: Rp{{ $('ValidateOrderData').first().json.order_detail.total }}\\nCara ambil: {{ $('ValidateOrderData').first().json.metode_kirim }}\\nCara bayar: {{ $('ValidateOrderData').first().json.metode_bayar }} ({{ $('ValidateOrderData').first().json.status_pembayaran }})\\n{{ $('ValidateOrderData').first().json.alamat_pengiriman ? 'Alamat: ' + $('ValidateOrderData').first().json.alamat_pengiriman : '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "187471a4-f687-4351-b188-181c6f6b43c7",
+      "name": "NotifyOwnerNewOrder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        23632,
+        3488
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FONNTE_CRED_ID",
+          "name": "Fonnte API"
+        }
+      }
     }
   ],
   "pinData": {},
@@ -3015,6 +3058,11 @@
         [
           {
             "node": "SendOrderConfirmation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "NotifyOwnerNewOrder",
             "type": "main",
             "index": 0
           }
@@ -3456,6 +3504,17 @@
         [
           {
             "node": "ParseAgentOutput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NotifyOwnerNewOrder": {
+      "main": [
+        [
+          {
+            "node": "CheckIfQRISPayment",
             "type": "main",
             "index": 0
           }
